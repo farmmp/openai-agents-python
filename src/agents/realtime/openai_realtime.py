@@ -370,6 +370,25 @@ def get_server_event_type_adapter() -> TypeAdapter[AllRealtimeServerEvents]:
     return ServerEventTypeAdapter
 
 
+def _normalize_custom_voice_for_server_event_validation(value: Any) -> Any:
+    # TODO: Remove this once generated Realtime server event models accept custom voice objects.
+    if isinstance(value, list):
+        return [_normalize_custom_voice_for_server_event_validation(item) for item in value]
+
+    if not isinstance(value, dict):
+        return value
+
+    normalized: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "voice" and isinstance(item, Mapping):
+            voice_id = item.get("id")
+            if isinstance(voice_id, str):
+                normalized[key] = voice_id
+                continue
+        normalized[key] = _normalize_custom_voice_for_server_event_validation(item)
+    return normalized
+
+
 async def _collect_enabled_handoffs(
     agent: RealtimeAgent[Any], context_wrapper: RunContextWrapper[Any]
 ) -> list[Handoff[Any, RealtimeAgent[Any]]]:
@@ -1054,7 +1073,10 @@ class OpenAIRealtimeWebSocketModel(RealtimeModel):
         try:
             if "previous_item_id" in event and event["previous_item_id"] is None:
                 event["previous_item_id"] = ""  # TODO (rm) remove
-            parsed: AllRealtimeServerEvents = self._server_event_type_adapter.validate_python(event)
+            validation_event = _normalize_custom_voice_for_server_event_validation(event)
+            parsed: AllRealtimeServerEvents = self._server_event_type_adapter.validate_python(
+                validation_event
+            )
         except pydantic.ValidationError as e:
             logger.error(f"Failed to validate server event: {event}", exc_info=True)
             await self._emit_event(RealtimeModelErrorEvent(error=e))
